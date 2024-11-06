@@ -10,7 +10,6 @@ const VERTEX_STRIDE =
     );
 
 export class TriangleProgram extends Program<TriangleProgramData> {
-
   static push(
       geometry: Float32Array|Float64Array,
       index: ArrayLike<number>,
@@ -48,6 +47,7 @@ export class TriangleProgram extends Program<TriangleProgramData> {
 
   constructor(gl: WebGL2RenderingContext) {
     super(createTriangleProgram(gl), gl, gl.TRIANGLES);
+    // super(createTriangleProgram(gl), gl, gl.LINE_STRIP);
     this.registerDisposer(() => {
       gl.deleteProgram(this.program.handle);
     });
@@ -98,11 +98,15 @@ export class TriangleProgram extends Program<TriangleProgramData> {
     gl.enableVertexAttribArray(this.program.attributes.fillColor);
     gl.vertexAttribDivisor(this.program.attributes.fillColor, 1);
     gl.enableVertexAttribArray(this.program.attributes.position);
+    
+    gl.uniform1f(
+        this.program.uniforms.flatEartherFactor,
+        (window as any).animating === true ? stickyEase() : 0
+    );
   }
 
   protected bindAttributes(offset: number): void {
     const gl = this.gl;
-
     gl.vertexAttribIPointer(
         this.program.attributes.fillColor,
         1,
@@ -135,8 +139,10 @@ interface TriangleProgramData extends ProgramData {
 
   uniforms: {
     cameraCenter: WebGLUniformLocation;
-    halfViewportSize: WebGLUniformLocation;
+    flatEartherFactor: WebGLUniformLocation;
     halfWorldSize: WebGLUniformLocation;
+    inverseHalfViewportSize: WebGLUniformLocation;
+    mvpMatrix: WebGLUniformLocation;
     z: WebGLUniformLocation;
   };
 }
@@ -146,45 +152,67 @@ function createTriangleProgram(gl: WebGL2RenderingContext): TriangleProgramData 
 
   const vs = `#version 300 es
 
-      // Mercator coordinates range from -1 to 1 on both x and y
-      // Pixels are in screen space (eg -320px to 320px for a 640px width)
+// Mercator coordinates range from -1 to 1 on both x and y
+// Pixels are in screen space (eg -320px to 320px for a 640px width)
 
-      uniform highp vec4 cameraCenter; // Mercator
-      uniform highp vec2 halfViewportSize; // pixels
-      uniform highp float halfWorldSize; // pixels
-      uniform highp float z;
+uniform highp mat4 mvpMatrix;
+uniform highp vec4 cameraCenter; // Mercator
+uniform highp vec2 inverseHalfViewportSize; // pixels
+uniform highp float halfWorldSize; // pixels
+uniform highp float z;
+uniform highp float flatEartherFactor;
 
-      in uint fillColor;
-      in highp vec2 position; // Mercator
+in uint fillColor;
+in highp vec2 position; // Mercator
 
-      // See https://github.com/visgl/luma.gl/issues/1764
-      invariant gl_Position;
+// See https://github.com/visgl/luma.gl/issues/1764
+invariant gl_Position;
 
-      out mediump vec4 fragFillColor;
+out mediump vec4 fragFillColor;
 
-      ${COLOR_OPERATIONS}
-      ${FP64_OPERATIONS}
+const float PI = 3.141592653589793;
 
-      void main() {
-        vec4 relativeCenter = sub_fp64(split(position), cameraCenter);
-        vec4 screenCoord =
-            mul_fp64(relativeCenter, vec4(split(halfWorldSize), split(halfWorldSize)));
-        vec4 p = div_fp64(screenCoord, split(halfViewportSize));
-        gl_Position = vec4(p.x + p.y, p.z + p.w, z, 1);
+${COLOR_OPERATIONS}
+${FP64_OPERATIONS}
 
-        fragFillColor = uint32ToVec4(fillColor);
-        fragFillColor = vec4(fragFillColor.rgb * fragFillColor.a, fragFillColor.a);
-      }
+void main() {
+  vec4 relativeCenter = sub_fp64(split(position), cameraCenter);
+  vec4 screenCoord =
+      mul_fp64(relativeCenter, vec4(split(halfWorldSize), split(halfWorldSize)));
+  vec4 p = mul_fp64(screenCoord, split(inverseHalfViewportSize));
+  vec4 flatEartherPos = vec4(p.x + p.y, p.z + p.w, z, 1);
+
+  // Aaaaand we're back to latlng. It's great to be back.
+  float sinLat = tanh(position.y * PI);
+  float lat = asin(sinLat);
+  float cosLat = cos(lat);
+  float lng = position.x * PI;
+
+  // Convert lat/lng to 3D Cartesian coordinates on a sphere
+  vec4 worldPosition = vec4(
+      cosLat * cos(lng), // x
+      sinLat,            // y
+      cosLat * sin(lng), // z
+      1.0                // w
+  );
+
+  vec4 sphereEartherPos = mvpMatrix * worldPosition;
+
+  gl_Position = mix(sphereEartherPos, flatEartherPos, flatEartherFactor);
+
+  fragFillColor = uint32ToVec4(fillColor);
+  fragFillColor = vec4(fragFillColor.rgb * fragFillColor.a, fragFillColor.a);
+}
     `;
   const fs = `#version 300 es
 
-      in mediump vec4 fragFillColor;
+in mediump vec4 fragFillColor;
 
-      out mediump vec4 fragColor;
+out mediump vec4 fragColor;
 
-      void main() {
-        fragColor = fragFillColor;
-      }
+void main() {
+  fragColor = fragFillColor;
+}
   `;
 
   const vertexId = checkExists(gl.createShader(gl.VERTEX_SHADER));
@@ -216,9 +244,40 @@ function createTriangleProgram(gl: WebGL2RenderingContext): TriangleProgramData 
     },
     uniforms: {
       cameraCenter: checkExists(gl.getUniformLocation(programId, 'cameraCenter')),
-      halfViewportSize: checkExists(gl.getUniformLocation(programId, 'halfViewportSize')),
+      flatEartherFactor: checkExists(gl.getUniformLocation(programId, 'flatEartherFactor')),
       halfWorldSize: checkExists(gl.getUniformLocation(programId, 'halfWorldSize')),
+      inverseHalfViewportSize: checkExists(gl.getUniformLocation(programId, 'inverseHalfViewportSize')),
+      mvpMatrix: checkExists(gl.getUniformLocation(programId, 'mvpMatrix')),
       z: checkExists(gl.getUniformLocation(programId, 'z')),
     },
   };
+}
+
+function easeInOutCubic(t: number) {
+  let eased;
+  if (t < 0.5) {
+    eased = 4 * t * t * t;
+  } else {
+    t = -2 * t + 2;
+    eased = 1 - t * t * t / 2;
+  }
+  return Math.min(1, Math.max(0, eased));
+}
+
+const animationStartMs = window.performance.now();
+function stickyEase() {
+  const cycleDuration = 4000;
+  let t = (window.performance.now() - animationStartMs) % cycleDuration;
+  const d = cycleDuration / 2;
+  const stopTime = 500;
+  if (t < stopTime) {
+    return 0;
+  } else if (t < d) {
+    t = (t - stopTime) / (d - stopTime);
+    return easeInOutCubic(t);
+  } else if (t < d + stopTime) {
+    return 1;
+  }
+  t = (t - d - stopTime) / (d - stopTime);
+  return 1 - easeInOutCubic(t);
 }

@@ -25,6 +25,9 @@ export class BillboardProgram extends Program<BillboardProgramData> {
     ]);
   }
 
+  // TODO(josh): remove this to show the billboards
+  override render(): void {}
+
   plan(
       center: Vec2,
       offsetPx: Vec2,
@@ -206,8 +209,9 @@ interface BillboardProgramData extends ProgramData {
   uniforms: {
     cameraCenter: WebGLUniformLocation;
     color: WebGLUniformLocation;
-    halfViewportSize: WebGLUniformLocation;
+    inverseHalfViewportSize: WebGLUniformLocation;
     halfWorldSize: WebGLUniformLocation;
+    mvpMatrix: WebGLUniformLocation;
     z: WebGLUniformLocation;
   };
 }
@@ -219,8 +223,9 @@ function createBillboardProgram(gl: WebGL2RenderingContext): BillboardProgramDat
       // Mercator coordinates range from -1 to 1 on both x and y
       // Pixels are in screen space (eg -320px to 320px for a 640px width)
 
+      uniform highp mat4 mvpMatrix;
       uniform highp vec4 cameraCenter; // Mercator
-      uniform highp vec2 halfViewportSize; // pixels
+      uniform highp vec2 inverseHalfViewportSize; // 1/pixels
       uniform highp float halfWorldSize; // pixels
       uniform highp float z;
 
@@ -264,8 +269,9 @@ function createBillboardProgram(gl: WebGL2RenderingContext): BillboardProgramDat
                         sum_fp64(relativeCenter, rotated),
                         vec4(split(halfWorldSize), split(halfWorldSize)));
         vec4 screenCoord = sum_fp64(worldCoord, split(offsetPx));
-        vec4 p = div_fp64(screenCoord, split(halfViewportSize));
+        vec4 p = mul_fp64(screenCoord, split(inverseHalfViewportSize));
         gl_Position = vec4(p.x + p.y, p.z + p.w, z, 1);
+        gl_Position.x += 0. * mvpMatrix[0][0]; // no-op
 
         uvec2 atlasXy = uvec2(
             atlasIndex % atlasSize.x, atlasIndex / atlasSize.x);
@@ -274,7 +280,7 @@ function createBillboardProgram(gl: WebGL2RenderingContext): BillboardProgramDat
         fragColorPosition = translate + scale * colorPosition;
         fragColorTint = uint32ToVec4(tint);
       }
-    `;
+  `;
   const fs = `#version 300 es
       uniform sampler2D color;
 
@@ -326,8 +332,9 @@ function createBillboardProgram(gl: WebGL2RenderingContext): BillboardProgramDat
     uniforms: {
       cameraCenter: checkExists(gl.getUniformLocation(programId, 'cameraCenter')),
       color: checkExists(gl.getUniformLocation(programId, 'color')),
-      halfViewportSize: checkExists(gl.getUniformLocation(programId, 'halfViewportSize')),
+      inverseHalfViewportSize: checkExists(gl.getUniformLocation(programId, 'inverseHalfViewportSize')),
       halfWorldSize: checkExists(gl.getUniformLocation(programId, 'halfWorldSize')),
+      mvpMatrix: checkExists(gl.getUniformLocation(programId, 'mvpMatrix')),
       z: checkExists(gl.getUniformLocation(programId, 'z')),
     },
   };

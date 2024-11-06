@@ -10,11 +10,12 @@ import { DialogService } from 'external/dev_april_corgi~/js/emu/dialog';
 
 import { DPI } from './common/dpi';
 import { fitBoundInScreen } from './common/math';
+import { createPerspectiveProjectionMatrix } from './common/matrix';
 import { Copyright, LatLng, LatLngRect, LatLngZoom, Vec2 } from './common/types';
 import { Planner } from './rendering/planner';
 import { Renderer } from './rendering/renderer';
 
-import { Camera, unprojectS2LatLng } from './camera';
+import { Camera, unprojectS2LatLng} from './camera';
 import { CopyrightDialog } from './copyright_dialog';
 import { CLICKED, DATA_CHANGED, MAP_MOVED, ZOOMED } from './events';
 import { Layer } from './layer';
@@ -61,6 +62,7 @@ export class MapController extends Controller<Args, Deps, HTMLDivElement, State>
 
   constructor(response: Response<MapController>) {
     super(response);
+    (window as any).animating = true;
 
     // We defer setting real coordinates until after we check our size below
     this.area = [-1, -1];
@@ -307,7 +309,7 @@ export class MapController extends Controller<Args, Deps, HTMLDivElement, State>
   }
 
   private render(): void {
-    const loadingData = this.layers.filter(l => l.loadingData()).length > 0;
+    const loadingData = this.layers.some(l => l.loadingData());
     if (loadingData !== this.state.loadingData) {
       this.updateState({
         ...this.state,
@@ -316,14 +318,14 @@ export class MapController extends Controller<Args, Deps, HTMLDivElement, State>
     }
 
     if (this.isIdle) {
-      const hasNewData = this.layers.filter(l => l.hasNewData()).length > 0;
+      const hasNewData = this.layers.some(l => l.hasNewData());
       if (hasNewData) {
         this.dataChangedDebouncer.trigger();
         this.nextRender = RenderType.DataChange;
       }
     }
 
-    if (this.nextRender !== RenderType.NoChange) {
+    if ((window as any).animating === true || this.nextRender !== RenderType.NoChange) {
       this.renderer.clear();
 
       const planner = new Planner();
@@ -331,23 +333,8 @@ export class MapController extends Controller<Args, Deps, HTMLDivElement, State>
         layer.render(planner, this.camera.zoom);
       }
 
-      const centerPixel = this.camera.centerPixel;
-      const centerPixels = [centerPixel];
-      // Add extra camera positions for wrapping the world
-      //
-      // There's some weird normalization bug at
-      // lat=42.3389265&lng=177.6919189&zoom=3.020
-      // where tiles don't show up around the wrap. Seems like S2 sometimes normalizes and sometimes
-      // doesn't depending on the size of the range. So we check the max/min.
-      const bounds = this.camera.viewportBounds(this.area[0], this.area[1]);
-      if (Math.min(bounds.lng().lo(), bounds.lng().hi()) < -Math.PI) {
-        centerPixels.push([centerPixel[0] + 2, centerPixel[1]]);
-      }
-      if (Math.max(bounds.lng().lo(), bounds.lng().hi()) > Math.PI) {
-        centerPixels.push([centerPixel[0] - 2, centerPixel[1]]);
-      }
-
-      planner.render(this.area, centerPixels, this.camera.worldRadius);
+      const mvpMatrix = this.camera.mvpMatrix(this.screenArea.height, this.screenArea.width);
+      planner.render(this.area, this.camera.centerPixel, this.camera.worldRadius, mvpMatrix);
 
       this.nextRender = RenderType.NoChange;
     }
@@ -386,4 +373,3 @@ enum RenderType {
 function isLatLngRect(v: LatLngRect|LatLngZoom): v is LatLngRect {
   return 'brand' in v;
 }
-

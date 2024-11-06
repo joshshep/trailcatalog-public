@@ -4,11 +4,13 @@ import { S2LatLng, S2LatLngRect, S2Loop } from 'java/org/trailcatalog/s2';
 import { SimpleS2 } from 'java/org/trailcatalog/s2/SimpleS2';
 
 import { Rect, Vec2 } from './common/types';
+import { createPerspectiveProjectionMatrix, createViewMatrix, multiply4x4 } from './common/matrix';
 
 const MAX_EDGE_ANGLE = SimpleS2.earthMetersToAngle(50000).radians();
 const MERCATOR_MAX_LAT_RADIANS = 85 / 90 * Math.PI / 2;
 const ZOOM_MIN = 2;
 const ZOOM_MAX = 22;
+const FOV = Math.PI / 4;
 
 export class Camera {
   private _center: S2LatLng;
@@ -87,6 +89,29 @@ export class Camera {
     return S2LatLngRect.fromPointPair(
         S2LatLng.fromRadians(lowLat, this._center.lngRadians() - dLng),
         S2LatLng.fromRadians(highLat, this._center.lngRadians() + dLng));
+  }
+
+  mvpMatrix(viewportHeightPx: number, viewportWidthPx: number): Float32Array {
+    const aspectRatio = viewportHeightPx / viewportWidthPx;
+    const lat = this.center.latRadians();
+    const lng = this.center.lngRadians();
+    const viewportRadiusWorldUnitsAtLat = Math.PI * Math.cos(lat) * this.inverseWorldRadius * viewportHeightPx / 2;
+    const distanceCameraToGlobeSurface = viewportRadiusWorldUnitsAtLat / Math.tan(FOV / 2);
+    const scale = 1 + distanceCameraToGlobeSurface;
+    const x = scale * Math.cos(lat) * Math.cos(lng);
+    const y = scale * Math.sin(lat);
+    const z = scale * Math.cos(lat) * Math.sin(lng);
+    const viewMatrix = createViewMatrix([x, y, z], [0, 0, 0], [0, -1, 0]);
+    const distanceToHorizon = Math.sqrt(scale * scale - 1);
+    const projectionMatrix = createPerspectiveProjectionMatrix(
+      aspectRatio,
+      FOV,
+      distanceCameraToGlobeSurface * 0.99,
+      distanceToHorizon * 1.001);
+    const mvpMatrix = new Float32Array(16);
+    multiply4x4(/*out=*/mvpMatrix, projectionMatrix, viewMatrix);
+    // Creating this isn't exactly free so we should probably put it somewhere.
+    return mvpMatrix;
   }
 }
 
