@@ -11,16 +11,13 @@ export class Planner {
   }
 
   add(drawables: Drawable[]): void {
-    for (const drawable of drawables) {
-      this.drawables.push(drawable);
-    }
+    this.drawables.push(...drawables);
   }
 
-  render(area: Vec2, centerPixels: Vec2[], worldRadius: number): void {
+  render(area: Vec2, centerPixel: Vec2, worldRadius: number, mvpMatrix: Float32Array): void {
     if (this.drawables.length === 0) {
       return;
     }
-
     this.drawables.sort((a, b) => {
       if (a.z !== b.z) {
         return a.z - b.z;
@@ -32,6 +29,7 @@ export class Planner {
         return a.geometryOffset - b.geometryOffset;
       }
     });
+    const inverseArea = [1 / area[0], 1 / area[1]] as Vec2;
 
     let drawStart = this.drawables[0];
     let drawStartIndex = 0;
@@ -44,9 +42,10 @@ export class Planner {
 
       drawStart.program.render(
           this.drawables.slice(drawStartIndex, i),
-          area,
-          centerPixels,
-          worldRadius);
+          inverseArea,
+          centerPixel,
+          worldRadius,
+          mvpMatrix);
       drawStart = drawable;
       drawStartIndex = i;
     }
@@ -54,8 +53,9 @@ export class Planner {
     // The last batch didn't actually draw, so draw it
     drawStart.program.render(
         this.drawables.slice(drawStartIndex, this.drawables.length),
-        area,
-        centerPixels,
-        worldRadius);
+        inverseArea,
+        centerPixel,
+        worldRadius,
+        mvpMatrix);
   }
 }

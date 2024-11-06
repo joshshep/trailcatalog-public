@@ -116,27 +116,27 @@ export class LineCapProgram extends Program<LineCapProgramData> {
   }
 
   protected draw(drawable: Drawable): void {
-    if (!drawable.vertexCount || !drawable.instanced) {
-      throw new Error('Expecting instances');
-    }
+    // if (!drawable.vertexCount || !drawable.instanced) {
+    //   throw new Error('Expecting instances');
+    // }
 
-    const gl = this.gl;
-    this.bindAttributes(drawable.geometryOffset);
+    // const gl = this.gl;
+    // this.bindAttributes(drawable.geometryOffset);
 
-    // Draw without the border
-    gl.uniform1i(this.program.uniforms.renderBorder, 0);
-    gl.uniform1ui(this.program.uniforms.side, 0);
-    gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, CIRCLE_VERTEX_COUNT, drawable.instanced.count);
-    gl.uniform1ui(this.program.uniforms.side, 1);
-    gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, CIRCLE_VERTEX_COUNT, drawable.instanced.count);
+    // // Draw without the border
+    // gl.uniform1i(this.program.uniforms.renderBorder, 0);
+    // gl.uniform1ui(this.program.uniforms.side, 0);
+    // gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, CIRCLE_VERTEX_COUNT, drawable.instanced.count);
+    // gl.uniform1ui(this.program.uniforms.side, 1);
+    // gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, CIRCLE_VERTEX_COUNT, drawable.instanced.count);
 
-    // Lower the z slightly so we draw under fill
-    gl.uniform1f(this.program.uniforms.z, (drawable.z - 0.1) / 1000);
-    gl.uniform1i(this.program.uniforms.renderBorder, 1);
-    gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, CIRCLE_VERTEX_COUNT, drawable.instanced.count);
-    gl.uniform1ui(this.program.uniforms.side, 0);
-    gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, CIRCLE_VERTEX_COUNT, drawable.instanced.count);
-    gl.uniform1f(this.program.uniforms.z, drawable.z / 1000);
+    // // Lower the z slightly so we draw under fill
+    // gl.uniform1f(this.program.uniforms.z, (drawable.z - 0.1) / 1000);
+    // gl.uniform1i(this.program.uniforms.renderBorder, 1);
+    // gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, CIRCLE_VERTEX_COUNT, drawable.instanced.count);
+    // gl.uniform1ui(this.program.uniforms.side, 0);
+    // gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, CIRCLE_VERTEX_COUNT, drawable.instanced.count);
+    // gl.uniform1f(this.program.uniforms.z, drawable.z / 1000);
   }
 
   protected deactivate(): void {
@@ -174,8 +174,9 @@ interface LineCapProgramData extends ProgramData {
   };
   uniforms: {
     cameraCenter: WebGLUniformLocation;
-    halfViewportSize: WebGLUniformLocation;
+    inverseHalfViewportSize: WebGLUniformLocation;
     halfWorldSize: WebGLUniformLocation;
+    mvpMatrix: WebGLUniformLocation;
     renderBorder: WebGLUniformLocation;
     side: WebGLUniformLocation;
     z: WebGLUniformLocation;
@@ -186,9 +187,10 @@ function createLineCapProgram(gl: WebGL2RenderingContext): LineCapProgramData {
   const programId = checkExists(gl.createProgram());
 
   const vs = `#version 300 es
+      uniform highp mat4 mvpMatrix;
       // This is a Mercator coordinate ranging from -1 to 1 on both x and y
       uniform highp vec4 cameraCenter;
-      uniform highp vec2 halfViewportSize;
+      uniform highp vec2 inverseHalfViewportSize;
       uniform highp float halfWorldSize;
       uniform bool renderBorder;
       uniform uint side;
@@ -233,8 +235,9 @@ function createLineCapProgram(gl: WebGL2RenderingContext): LineCapProgramData {
             sum_fp64(
                 mul_fp64(location, vec4(split(halfWorldSize), split(halfWorldSize))),
                 split(push));
-        vec4 p = div_fp64(worldCoord, split(halfViewportSize));
+        vec4 p = mul_fp64(worldCoord, split(inverseHalfViewportSize));
         gl_Position = vec4(p.x + p.y, p.z + p.w, z, 1);
+        gl_Position.x += 0. * mvpMatrix[0][0]; // no-op
 
         fragColorFill = uint32FToVec4(colorFill);
         fragColorStroke = uint32FToVec4(colorStroke);
@@ -306,8 +309,9 @@ function createLineCapProgram(gl: WebGL2RenderingContext): LineCapProgramData {
     },
     uniforms: {
       cameraCenter: checkExists(gl.getUniformLocation(programId, 'cameraCenter')),
-      halfViewportSize: checkExists(gl.getUniformLocation(programId, 'halfViewportSize')),
+      inverseHalfViewportSize: checkExists(gl.getUniformLocation(programId, 'inverseHalfViewportSize')),
       halfWorldSize: checkExists(gl.getUniformLocation(programId, 'halfWorldSize')),
+      mvpMatrix: checkExists(gl.getUniformLocation(programId, 'mvpMatrix')),
       renderBorder: checkExists(gl.getUniformLocation(programId, 'renderBorder')),
       side: checkExists(gl.getUniformLocation(programId, 'side')),
       z: checkExists(gl.getUniformLocation(programId, 'z')),

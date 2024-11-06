@@ -399,7 +399,7 @@ class CellLayer extends Layer {
   }
 
   override render(planner: Planner): void {
-    const geometry = new ArrayBuffer(65536);
+    const geometry = new ArrayBuffer(1 << 18);
     let offset = 0;
     const drawables = [];
     for (const loop of this.s2Cells.values()) {
@@ -424,6 +424,10 @@ class CellLayer extends Layer {
                 offset,
                 this.glBuffer,
             );
+        if (offset + drawable.geometryByteLength > geometry.byteLength) {
+          console.error("Ignoring s2cell drawable(s) - buffer too small");
+          break; // Maybe the next loop is smaller. Or maybe I'm lazy. What am I your janitor?
+        }
         offset += drawable.geometryByteLength;
         drawables.push(drawable);
         last = i;
@@ -451,10 +455,13 @@ class CellLayer extends Layer {
               offset,
               this.glBuffer,
           );
+      if (offset + drawable.geometryByteLength > geometry.byteLength) {
+        console.error("Ignoring zxy drawable(s) - buffer too small");
+        break;
+      }
       offset += drawable.geometryByteLength;
       drawables.push(drawable);
     }
-
     this.renderer.uploadData(geometry, offset, this.glBuffer, this.renderer.gl.STREAM_DRAW);
     planner.add(drawables);
     this.lastRenderTime = Date.now();

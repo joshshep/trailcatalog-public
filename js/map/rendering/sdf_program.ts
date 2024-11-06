@@ -212,17 +212,17 @@ export class SdfProgram extends Program<SdfProgramData> {
   }
 
   protected draw(drawable: Drawable): void {
-    if (!drawable.vertexCount || !drawable.instanced) {
-      throw new Error('Expecting instances');
-    }
+    // if (!drawable.vertexCount || !drawable.instanced) {
+    //   throw new Error('Expecting instances');
+    // }
 
-    const gl = this.gl;
-    this.bindAttributes(drawable.geometryOffset);
+    // const gl = this.gl;
+    // this.bindAttributes(drawable.geometryOffset);
 
-    gl.uniform1f(this.program.uniforms.halo, 0.35);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, drawable.vertexCount, drawable.instanced.count);
-    gl.uniform1f(this.program.uniforms.halo, 0.75);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, drawable.vertexCount, drawable.instanced.count);
+    // gl.uniform1f(this.program.uniforms.halo, 0.35);
+    // gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, drawable.vertexCount, drawable.instanced.count);
+    // gl.uniform1f(this.program.uniforms.halo, 0.75);
+    // gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, drawable.vertexCount, drawable.instanced.count);
   }
 
   protected deactivate(): void {
@@ -267,9 +267,10 @@ interface SdfProgramData extends ProgramData {
   uniforms: {
     cameraCenter: WebGLUniformLocation;
     color: WebGLUniformLocation;
-    halfViewportSize: WebGLUniformLocation;
+    inverseHalfViewportSize: WebGLUniformLocation;
     halfWorldSize: WebGLUniformLocation;
     halo: WebGLUniformLocation;
+    mvpMatrix: WebGLUniformLocation;
     z: WebGLUniformLocation;
   };
 }
@@ -281,8 +282,9 @@ function createSdfProgram(gl: WebGL2RenderingContext): SdfProgramData {
       // Mercator coordinates range from -1 to 1 on both x and y
       // Pixels are in screen space (eg -320px to 320px for a 640px width)
 
+      uniform highp mat4 mvpMatrix;
       uniform highp vec4 cameraCenter; // Mercator
-      uniform highp vec2 halfViewportSize; // pixels
+      uniform highp vec2 inverseHalfViewportSize; // 1 / pixels
       uniform highp float halfWorldSize; // pixels
       uniform mediump float halo;
       uniform highp float z;
@@ -321,8 +323,9 @@ function createSdfProgram(gl: WebGL2RenderingContext): SdfProgramData {
                 mul_fp64(relativeCenter, vec4(split(halfWorldSize), split(halfWorldSize))),
                 rotated);
         vec4 screenCoord = sum_fp64(worldCoord, split(offsetPx));
-        vec4 p = div_fp64(screenCoord, split(halfViewportSize));
+        vec4 p = mul_fp64(screenCoord, split(inverseHalfViewportSize));
         gl_Position = vec4(p.x + p.y, p.z + p.w, z, 1);
+        gl_Position.x += 0. * mvpMatrix[0][0]; // no-op
 
         uvec2 atlasXy = uvec2(
             atlasIndex % atlasSize.x, atlasIndex / atlasSize.x);
@@ -386,9 +389,10 @@ function createSdfProgram(gl: WebGL2RenderingContext): SdfProgramData {
     uniforms: {
       cameraCenter: checkExists(gl.getUniformLocation(programId, 'cameraCenter')),
       color: checkExists(gl.getUniformLocation(programId, 'color')),
-      halfViewportSize: checkExists(gl.getUniformLocation(programId, 'halfViewportSize')),
+      inverseHalfViewportSize: checkExists(gl.getUniformLocation(programId, 'inverseHalfViewportSize')),
       halfWorldSize: checkExists(gl.getUniformLocation(programId, 'halfWorldSize')),
       halo: checkExists(gl.getUniformLocation(programId, 'halo')),
+      mvpMatrix: checkExists(gl.getUniformLocation(programId, 'mvpMatrix')),
       z: checkExists(gl.getUniformLocation(programId, 'z')),
     },
   };

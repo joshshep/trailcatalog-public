@@ -10,7 +10,7 @@ export interface Triangles {
   index: number[];
 }
 
-export function triangulateMb(geometry: number[], starts: number[]): Triangles {
+export function triangulateMb(geometry: number[], starts: number[], maxTriangleLengthMeters?: number): Triangles {
   // We need to figure out what's an exterior and what's a ring. We do so by calculating the sign of
   // the polygon's area.
   starts.push(geometry.length);
@@ -63,10 +63,154 @@ export function triangulateMb(geometry: number[], starts: number[]): Triangles {
     }
   }
 
+  if (maxTriangleLengthMeters !== undefined) {
+    const maxLengthRadians = maxTriangleLengthMeters / 6378137;
+    return subdivideTriangles2D(
+      geometry,
+      allIndices,
+      maxLengthRadians * maxLengthRadians,
+    );
+  } else {
+    return {
+      geometry,
+      index: allIndices,
+    };
+  }
+}
+
+
+// Helper function to subdivide triangles in 2D space
+function subdivideTriangles2D(
+  geometry: number[],
+  indices: number[],
+  maxLengthRadiansSq: number
+): Triangles {
+  const newIndices: number[] = [];
+  const midpointIndices = new Map<number, number>();
+
+  for (let i = 0; i < indices.length; i += 3) {
+    const i0 = indices[i];
+    const i1 = indices[i + 1];
+    const i2 = indices[i + 2];
+
+    subdivideTriangle2D(i0, i1, i2, geometry, newIndices, maxLengthRadiansSq, midpointIndices);
+  }
+
   return {
     geometry,
-    index: allIndices,
+    index: newIndices,
   };
+}
+
+function subdivideTriangle2D(
+  i0: number,
+  i1: number,
+  i2: number,
+  geometry: number[],
+  indices: number[],
+  maxLengthRadiansSq: number,
+  midpointIndices: Map<number, number>
+) {
+  const p0 = [geometry[2 * i0], geometry[2 * i0 + 1]] as [number, number];
+  const p1 = [geometry[2 * i1], geometry[2 * i1 + 1]] as [number, number];
+  const p2 = [geometry[2 * i2], geometry[2 * i2 + 1]] as [number, number];
+
+  // prefer to split too many triangles rather than too few
+  const y = Math.min(Math.abs(p0[1]), Math.abs(p1[1]), Math.abs(p2[1]));
+  // project then unproject then unproject *again* in the shader
+  const lat = Math.asin(Math.tanh(y * Math.PI));
+  const scale = Math.PI * Math.cos(lat); // bigger near the equator
+  const scaledMaxLengthRadiansSq = maxLengthRadiansSq / (scale * scale); // Maybe pass this along recursively
+
+  const d0 = distSq(p0, p1);
+  const d1 = distSq(p1, p2);
+  const d2 = distSq(p2, p0);
+
+  const edge0TooLong = d0 > scaledMaxLengthRadiansSq;
+  const edge1TooLong = d1 > scaledMaxLengthRadiansSq;
+  const edge2TooLong = d2 > scaledMaxLengthRadiansSq;
+
+  // If none of the edges are too long, keep the triangle as it is
+  if (!edge0TooLong && !edge1TooLong && !edge2TooLong) {
+    indices.push(i0, i1, i2);
+    return;
+  }
+
+  function getMidpointIndex(iA: number, iB: number): number {
+    const key = pair(iA, iB);
+    const midpointIndex = midpointIndices.get(key);
+    if (midpointIndex === undefined) {
+      const xMid = (geometry[2 * iA] + geometry[2 * iB]) / 2;
+      const yMid = (geometry[2 * iA + 1] + geometry[2 * iB + 1]) / 2;
+      const index = geometry.length / 2;
+      geometry.push(xMid, yMid);
+      midpointIndices.set(key, index);
+      return index;
+    } else {
+      return midpointIndex;
+    }
+  }
+
+  // Subdivide edges as needed
+  let a = i0;
+  let b = i1;
+  let c = i2;
+
+  if (edge0TooLong && edge1TooLong && edge2TooLong) {
+    const ab = getMidpointIndex(a, b);
+    const bc = getMidpointIndex(b, c);
+    const ca = getMidpointIndex(c, a);
+    subdivideTriangle2D(a, ab, ca, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(ab, b, bc, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(bc, c, ca, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(ab, bc, ca, geometry, indices, maxLengthRadiansSq, midpointIndices);
+  } else if (edge0TooLong && edge1TooLong) {
+    const ab = getMidpointIndex(a, b);
+    const bc = getMidpointIndex(b, c);
+    subdivideTriangle2D(a, ab, c, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(ab, bc, c, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(ab, b, bc, geometry, indices, maxLengthRadiansSq, midpointIndices);
+  } else if (edge0TooLong && edge2TooLong) {
+    const ab = getMidpointIndex(a, b);
+    const ca = getMidpointIndex(c, a);
+    subdivideTriangle2D(a, ab, ca, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(ab, b, c, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(ca, c, ab, geometry, indices, maxLengthRadiansSq, midpointIndices);
+  } else if (edge1TooLong && edge2TooLong) {
+    const bc = getMidpointIndex(b, c);
+    const ca = getMidpointIndex(c, a);
+    subdivideTriangle2D(a, b, ca, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(b, bc, ca, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(bc, c, ca, geometry, indices, maxLengthRadiansSq, midpointIndices);
+  } else if (edge0TooLong) {
+    const ab = getMidpointIndex(a, b);
+    subdivideTriangle2D(a, ab, c, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(ab, b, c, geometry, indices, maxLengthRadiansSq, midpointIndices);
+  } else if (edge1TooLong) {
+    const bc = getMidpointIndex(b, c);
+    subdivideTriangle2D(a, b, bc, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(a, bc, c, geometry, indices, maxLengthRadiansSq, midpointIndices);
+  } else if (edge2TooLong) {
+    const ca = getMidpointIndex(c, a);
+    subdivideTriangle2D(a, b, ca, geometry, indices, maxLengthRadiansSq, midpointIndices);
+    subdivideTriangle2D(b, c, ca, geometry, indices, maxLengthRadiansSq, midpointIndices);
+  } else {
+    // Should not reach here
+    indices.push(a, b, c);
+  }
+}
+
+// Map non-negative pairs of integers to non-negative integers. pair(a, b) = pair(b, a)
+function pair(a: number, b: number): number {
+  let max = Math.max(a, b);
+  let min = Math.min(a, b);
+  return max * (max + 1) / 2 + min;
+}
+
+function distSq(p1: number[], p2: number[]): number {
+  const dx = p1[0] - p2[0];
+  const dy = p1[1] - p2[1];
+  return dx * dx + dy * dy;
 }
 
 export function triangulateS2(polygon: S2Polygon): Triangles {
@@ -211,4 +355,3 @@ export function triangulateS2(polygon: S2Polygon): Triangles {
     index,
   };
 }
-
